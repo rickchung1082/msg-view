@@ -1,0 +1,125 @@
+#!/usr/bin/env python
+
+# This file was taken from Riverbank's examples,
+# which was an adaptation of the original C++ Qt's examples.
+
+import sys
+import os
+import optparse
+
+from PySide import QtCore, QtGui
+
+import serial
+import zmqsubscribeqt
+
+
+if __name__ == '__main__':
+
+    import sys
+    import math
+
+    args = sys.argv[1:]
+
+    p = optparse.OptionParser(option_list=[
+        optparse.Option('-b', '--baudrate', type=int, default=115200),
+        optparse.Option('-d', '--device', default='/dev/ttyUSB0'),
+        optparse.Option('--bytesize', type=int, default=8),
+        optparse.Option('--stopbits', type=int, default=1),
+        optparse.Option('--timeout', type=float, default=0),
+        ])
+    (options, args) = p.parse_args(args)
+
+    app = QtGui.QApplication(sys.argv[:1])
+
+    # Ui.
+    toplevel = QtGui.QWidget()
+    layout = QtGui.QVBoxLayout()
+    toplevel.setLayout(layout)
+
+    if 1:
+        SERIAL_UPDATE_INTERVAL = 100
+        if 0:
+            text = QtGui.QPlainTextEdit()
+        else:
+            text = QtGui.QTextEdit()
+        layout.addWidget(text)
+        text.insertPlainText('Hello')
+        b = QtGui.QPushButton('append')
+        toplevel.connect(b, QtCore.SIGNAL('clicked()'), lambda *x: text.insertPlainText('new msg\n'))
+        layout.addWidget(b)
+        global reading_serial, notifier, serial_file, serial_timer
+        # FIXME: make opening the serial port be non blocking
+        s = serial.Serial(options.device,
+                bytesize=options.bytesize, baudrate=options.baudrate, stopbits=options.stopbits,
+                timeout=options.timeout)
+        s.nonblocking()
+
+        serial_file = s
+        reading_serial = False
+
+        def serial_data_ready(fd):
+            global reading_serial, notifier
+            if 0:
+                sys.stderr.write('serial_data_ready: reading: %s\n' % (reading_serial,))
+            if not reading_serial:
+                data_read()
+                serial_timer.start(SERIAL_UPDATE_INTERVAL)
+                reading_serial = True
+            else:
+                notifier.setEnabled(False)
+
+        def serial_update_timeout():
+            global reading_serial, notifier, serial_timer
+            if 0:
+                sys.stderr.write('serial_update_timeout: reading: %s\n' % (reading_serial,))
+            t = data_read()
+            if not t:
+                sys.stderr.write('serial_update_timeout: EMPTY\n')
+                reading_serial = False
+                serial_timer.stop()
+                notifier.setEnabled(True)
+
+        def text_append(text, msg):
+            text.insertPlainText(msg)
+            cursor = text.textCursor()
+            cursor.movePosition(QtGui.QTextCursor.End)
+            text.setTextCursor(cursor)
+            text.ensureCursorVisible()
+
+        def data_read():
+            global serial_file
+            s = serial_file
+            fd = s.fileno()
+            o = []
+            while 1:
+                t = os.read(fd, 1)
+                if t == '':
+                    break
+                o.append(t)
+            if o:
+                text_append(text, ''.join( 'S: %02x\n' % (ord(x),) for x in o ))
+                return True
+            else:
+                return False
+
+        notifier = QtCore.QSocketNotifier(s.fileno(), QtCore.QSocketNotifier.Read)
+        serial_timer = QtCore.QTimer()
+        serial_timer.timeout.connect(serial_update_timeout)
+        serial_timer.start(SERIAL_UPDATE_INTERVAL)
+        
+        toplevel.connect(notifier, QtCore.SIGNAL('activated(int)'), serial_data_ready)
+        notifier.setEnabled(True)
+
+        class Bag(object):
+            def __init__(self, **kwargs):
+                self.__dict__.update(kwargs)
+
+        zmqsub = zmqsubscribeqt.ZMQSubscriber(Bag(publisher='tcp://192.168.1.2:8899'))
+
+        def zmq_msg_ready(msg):
+            text_append(text, msg + '\n')
+
+        zmqsub.connect(zmq_msg_ready)
+
+    toplevel.show()
+    sys.exit(app.exec_())
